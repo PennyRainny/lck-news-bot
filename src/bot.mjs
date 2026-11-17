@@ -72,8 +72,10 @@ function isDue(p, cfg, state, now) {
   if (CLOUD) {
     if (p !== 'x' && sessionDead(p, state, now)) return false; // X still has the login-free route
     const every = cfg.intervalsMinutes[p];
-    const tick = cfg.cronMinutes; // the workflow fires every `cronMinutes`; no clock state needed
-    return every <= tick || Math.floor(now / 60e3) % every < tick;
+    const tick = cfg.cronMinutes; // the workflow fires about every `cronMinutes`
+    if (every <= tick) return true;
+    // GitHub starts scheduled runs late and sometimes drops them, so go by the last check, not the clock
+    return now - (state.lastRun[p] || 0) >= (every - tick / 2) * 60e3;
   }
   return (state.humanWaitUntil[p] || 0) <= now && now - (state.lastRun[p] || 0) >= cfg.intervalsMinutes[p] * 60e3 - 5000;
 }
@@ -142,7 +144,8 @@ async function cycle({ force = false, dry = false } = {}) {
         const prev = state.login[platform];
         if (!prev || prev.ok !== next.ok || prev.reason !== next.reason) state.login[platform] = { ...next, at: Date.now() };
       }
-      if (!human && !dry && !CLOUD) state.lastRun[platform] = Date.now();
+      // cloud: only slower-than-the-cron platforms need it (keeps state.json from changing every run)
+      if (!human && !dry && (!CLOUD || cfg.intervalsMinutes[platform] > cfg.cronMinutes)) state.lastRun[platform] = Date.now();
       if (!human && usedSession && state.dead[platform]) {
         delete state.dead[platform];
         restored.push(platform);

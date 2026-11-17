@@ -2,7 +2,8 @@ name: LCK News
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # GitHub may start scheduled runs a few minutes late
+    # every 10 min, off the top of the hour (GitHub drops scheduled runs most at :00)
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
 
 permissions:
