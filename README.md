@@ -14,9 +14,9 @@ Runs free on **GitHub Actions** every ~10 minutes. No X/Instagram API keys.
 ```
 GitHub Actions (cron */10)                     this PC (only when a human is needed)
   restore state.json  <- branch `state`          npm run setup  -> local page:
-  headless Chrome + session cookies                 Discord token, invite, test message
-    X: profile page -> UserTweets JSON              Log in to X / Instagram (Chrome window)
-    IG: web_profile_info JSON                         -> session sent to GitHub Secrets
+  X: api.fxtwitter.com (login-free)                 Discord token, invite, test message
+     backup: headless Chrome + X session            Log in to X / Instagram (Chrome window)
+  IG: headless Chrome + IG session -> GraphQL         -> session sent to GitHub Secrets
   new posts -> Discord embeds (REST)             npm run login  -> re-login when Discord says
   save state.json     -> branch `state`                           a session stopped working
 ```
