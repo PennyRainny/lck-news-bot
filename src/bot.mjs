@@ -9,13 +9,42 @@
 //   node src/bot.mjs run                 run forever on this PC instead of the cloud
 import { PLATFORMS, PLATFORM_NAME, jitter, loadEnv, loadSources, loadState, log, saveState, sleep, srcKey } from './util.mjs';
 import { CLOUD, openBrowser, secretHash } from './browser.mjs';
-import { fetchX } from './x.mjs';
+import { fetchX, fetchXFx } from './x.mjs';
 import { fetchInstagram } from './instagram.mjs';
 import { identifyOnce, sendPost, sendText } from './discord.mjs';
 
 loadEnv();
 
-const FETCH = { x: fetchX, instagram: fetchInstagram };
+// X: login-free FxTwitter first, the X session only as backup. Instagram: session only.
+async function fetchSource(src, getPage, { allowSession = true } = {}) {
+  if (src.platform === 'instagram') return { ...(await fetchInstagram(await getPage(), src)), via: 'session' };
+  try {
+    return { ...(await fetchXFx(src)), via: 'fx' };
+  } catch (fxErr) {
+    if (!allowSession) throw fxErr;
+    log(`[x] @${src.handle}: ${fxErr.message} — trying the X session`);
+    return { ...(await fetchX(await getPage(), src)), via: 'session' };
+  }
+}
+
+// The headless browser only starts if a source actually needs a session.
+function lazyBrowser() {
+  let ctx = null;
+  let page = null;
+  return {
+    async getPage() {
+      if (!page) {
+        ctx = await launch();
+        page = ctx.pages()[0] || (await ctx.newPage());
+      }
+      return page;
+    },
+    async close() {
+      if (ctx) await ctx.close().catch(() => {});
+    },
+  };
+}
+
 const SEEN_TTL = 7 * 24 * 3600e3; // > maxAgeHours, so an old post can never come back
 const HUMAN_TIMEOUT_MIN = 15;
 const HUMAN_RETRY_MIN = 60; // local: re-open the login window after this
@@ -32,10 +61,15 @@ async function launch() {
   }
 }
 
+// Cloud: a session that failed and whose secret has not changed since.
+const sessionDead = (p, state, now) => {
+  const dead = state.dead[p];
+  return CLOUD && !!dead && dead.hash === secretHash(p) && now - dead.at < DEAD_RETRY_H * 3600e3;
+};
+
 function isDue(p, cfg, state, now) {
   if (CLOUD) {
-    const dead = state.dead[p];
-    if (dead && dead.hash === secretHash(p) && now - dead.at < DEAD_RETRY_H * 3600e3) return false;
+    if (p !== 'x' && sessionDead(p, state, now)) return false; // X still has the login-free route
     const every = cfg.intervalsMinutes[p];
     const tick = cfg.cronMinutes; // the workflow fires every `cronMinutes`; no clock state needed
     return every <= tick || Math.floor(now / 60e3) % every < tick;
@@ -74,40 +108,47 @@ async function cycle({ force = false, dry = false } = {}) {
 
   const outbox = [];
   const restored = [];
-  const ctx = await launch();
+  const browser = lazyBrowser();
   try {
-    const page = ctx.pages()[0] || (await ctx.newPage());
     for (const platform of due) {
+      let allowSession = !sessionDead(platform, state, now);
+      let usedSession = false;
       for (const src of cfg.sources.filter((s) => s.platform === platform)) {
         const row = { src, status: 'ok', posts: [] };
         out.rows.push(row);
         try {
-          Object.assign(row, await FETCH[platform](page, src));
+          Object.assign(row, await fetchSource(src, browser.getPage, { allowSession }));
+          if (row.via === 'session') usedSession = true;
           if (!dry) queueNew(state, cfg, src, row, outbox);
         } catch (e) {
           row.status = e.code || 'ERROR';
           row.error = e.message;
           if (e.code === 'LOGIN' || e.code === 'CHECKPOINT') {
             out.needHuman[platform] = { reason: e.code.toLowerCase(), url: e.url };
-            break;
+            if (platform !== 'x') break;
+            allowSession = false; // X: keep going on the login-free route for the rest
+            continue;
           }
           log(`[${platform}] @${src.handle}: ${e.message}`);
-          if (e.code === 'RATE') break;
+          if (e.code === 'RATE') allowSession = false;
+          if (e.code === 'RATE' && platform !== 'x') break;
         }
-        await jitter(1500, 4000);
+        await (row.via === 'fx' ? jitter(300, 900) : jitter(1500, 4000));
       }
       const human = out.needHuman[platform];
-      const next = human ? { ok: false, reason: human.reason } : { ok: true };
-      const prev = state.login[platform];
-      if (!prev || prev.ok !== next.ok || prev.reason !== next.reason) state.login[platform] = { ...next, at: Date.now() };
+      if (human || usedSession) {
+        const next = human ? { ok: false, reason: human.reason } : { ok: true };
+        const prev = state.login[platform];
+        if (!prev || prev.ok !== next.ok || prev.reason !== next.reason) state.login[platform] = { ...next, at: Date.now() };
+      }
       if (!human && !dry && !CLOUD) state.lastRun[platform] = Date.now();
-      if (!human && state.dead[platform]) {
+      if (!human && usedSession && state.dead[platform]) {
         delete state.dead[platform];
         restored.push(platform);
       }
     }
   } finally {
-    await ctx.close().catch(() => {});
+    await browser.close();
   }
 
   if (dry) {
@@ -151,8 +192,12 @@ async function cloudAlert(platform, info) {
   if (!known) {
     const extra =
       platform === 'instagram' && info.reason === 'checkpoint' ? ' If the Instagram app asks "Was this you?", tap **This was me** first.' : '';
+    const impact =
+      platform === 'x'
+        ? 'X posts still arrive through the login-free route; only accounts that route fails on are paused.'
+        : `${name} posts are paused.`;
     await sendText(
-      `⚠️ **LCK News Bot** — the ${name} session ${hash ? 'stopped working' : 'is not set up yet'}; ${name} posts are paused.${extra}\n` +
+      `⚠️ **LCK News Bot** — the ${name} session ${hash ? 'stopped working' : 'is not set up yet'}. ${impact}${extra}\n` +
         'Fix: on the bot PC, open `.SELFWORK\\LCK_News_Bot` and run `npm run login` — a Chrome window opens, log in, and the cloud picks it up by itself.',
     ).catch((e) => log('alert failed:', e.message));
     state.alerts[platform] = Date.now();
@@ -188,13 +233,13 @@ async function askHuman(platform, info) {
 
 function printRows(rows) {
   const pad = (s, n) => String(s ?? '').padEnd(n).slice(0, n);
-  console.log('\n' + pad('platform', 10) + pad('handle', 16) + pad('status', 11) + pad('name', 26) + pad('followers', 11) + pad('posts', 6) + 'newest');
+  console.log('\n' + pad('platform', 10) + pad('handle', 16) + pad('status', 13) + pad('name', 26) + pad('followers', 11) + pad('posts', 6) + 'newest');
   for (const r of rows) {
     const newest = r.posts.at(-1);
     console.log(
       pad(r.src.platform, 10) +
         pad(r.src.handle, 16) +
-        pad(r.status, 11) +
+        pad(r.status === 'ok' ? `ok (${r.via})` : r.status, 13) +
         pad(r.profile?.name || r.error || '', 26) +
         pad(r.profile?.followers?.toLocaleString?.('en-US') ?? '', 11) +
         pad(r.posts.length, 6) +
@@ -220,12 +265,12 @@ async function previewCmd(handle) {
   const cfg = loadSources();
   const src = cfg.sources.find((s) => s.handle.toLowerCase() === String(handle).toLowerCase());
   if (!src) throw new Error(`no source with handle ${handle} in sources.json`);
-  const ctx = await launch();
+  const browser = lazyBrowser();
   let res;
   try {
-    res = await FETCH[src.platform](ctx.pages()[0] || (await ctx.newPage()), src);
+    res = await fetchSource(src, browser.getPage);
   } finally {
-    await ctx.close().catch(() => {});
+    await browser.close();
   }
   const item = res.posts.filter((p) => p.kind !== 'repost').at(-1);
   if (!item) throw new Error(`@${handle}: no posts found`);

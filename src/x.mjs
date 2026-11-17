@@ -1,7 +1,69 @@
-// X (Twitter): open the profile in the logged-in headless browser and read the
-// UserTweets GraphQL response the page itself requests. No X API key needed.
-import { SourceError, decodeEntities } from './util.mjs';
+// X (Twitter), two routes, no X API key either way:
+//  1. fetchXFx  — FxTwitter's public API (api.fxtwitter.com): no login, no browser. Primary.
+//  2. fetchX    — the logged-in headless browser reads the UserTweets GraphQL response the
+//                 profile page requests. Backup when FxTwitter fails / returns nothing.
+import { SourceError, decodeEntities, sleep } from './util.mjs';
 import { hasSession, LOGIN } from './browser.mjs';
+
+const FX = 'https://api.fxtwitter.com/2/profile/';
+
+export async function fetchXFx(src) {
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(FX + encodeURIComponent(src.handle) + '/statuses', {
+        headers: { 'User-Agent': 'lck-news-bot/1.0' },
+        signal: AbortSignal.timeout(20000),
+      });
+      const j = await r.json().catch(() => null);
+      if (r.ok && j?.code === 200 && j.results?.length) return parseFx(j, src.handle);
+      last = new Error(`FxTwitter HTTP ${r.status}${j?.message ? ' ' + j.message : ''}${j?.results ? ' (no posts)' : ''}`);
+    } catch (e) {
+      last = new Error(`FxTwitter ${e.name === 'TimeoutError' ? 'timeout' : e.message}`);
+    }
+    if (attempt === 0) await sleep(2000);
+  }
+  throw last;
+}
+
+export function parseFx(j, handle) {
+  const me = handle.toLowerCase();
+  let profile = null;
+  const posts = [];
+  const seen = new Set();
+  for (const s of j.results || []) {
+    if (s.type && s.type !== 'status') continue;
+    const author = s.author?.screen_name || '';
+    const mine = author.toLowerCase() === me;
+    if (!profile && (mine || s.reposted_by)) {
+      const u = mine ? s.author : s.reposted_by;
+      profile = { name: u.name, avatar: u.avatar_url || null, followers: u.followers ?? null };
+    }
+    const repost = !!s.reposted_by;
+    if (!repost && !mine) continue;
+    const replyTo = typeof s.replying_to === 'string' ? s.replying_to : s.replying_to?.screen_name;
+    if (!repost && replyTo && replyTo.toLowerCase() !== me) continue; // replies to other people
+    if (seen.has(s.id)) continue;
+    seen.add(s.id);
+    const m = s.media?.all?.[0];
+    const q = s.quote;
+    posts.push({
+      key: `x:${s.id}`,
+      platform: 'x',
+      id: s.id,
+      url: `https://x.com/${author}/status/${s.id}`,
+      kind: repost ? 'repost' : q ? 'quote' : 'post',
+      repostOf: repost ? '@' + author : null,
+      text: String(s.text || '').trim(),
+      image: m ? (m.type === 'photo' ? m.url : m.thumbnail_url || null) : null,
+      isVideo: !!m && m.type !== 'photo',
+      quote: q ? { author: '@' + (q.author?.screen_name || '?'), text: String(q.text || '').trim() } : null,
+      createdAt: (s.created_timestamp || 0) * 1000 || Date.parse(s.created_at) || Date.now(),
+    });
+  }
+  posts.sort((a, b) => a.createdAt - b.createdAt);
+  return { profile, posts };
+}
 
 const TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/UserTweets(\?|$)/;
 const USER_RE = /\/i\/api\/graphql\/[^/]+\/UserByScreenName(\?|$)/;
@@ -109,21 +171,23 @@ export async function fetchX(page, src) {
     if (resp.status() === 429) throw new SourceError('RATE', 'X rate limit (429)');
     if (!resp.ok()) throw new Error(`timeline HTTP ${resp.status()}`);
 
-    const json = await resp.json();
-    const raws = [];
-    collect(json?.data, raws);
-    const seen = new Set();
-    const posts = [];
-    for (const r of raws) {
-      const p = normalize(r, src.handle);
-      if (p && !seen.has(p.key)) {
-        seen.add(p.key);
-        posts.push(p);
-      }
-    }
-    posts.sort((a, b) => a.createdAt - b.createdAt);
-    return { profile: profileOf(userJson), posts };
+    return { profile: profileOf(userJson), posts: parseTimeline(await resp.json(), src.handle) };
   } finally {
     page.off('response', onResponse);
   }
+}
+
+export function parseTimeline(json, handle) {
+  const raws = [];
+  collect(json?.data, raws);
+  const seen = new Set();
+  const posts = [];
+  for (const r of raws) {
+    const p = normalize(r, handle);
+    if (p && !seen.has(p.key)) {
+      seen.add(p.key);
+      posts.push(p);
+    }
+  }
+  return posts.sort((a, b) => a.createdAt - b.createdAt);
 }

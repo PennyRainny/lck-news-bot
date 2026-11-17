@@ -1,82 +1,93 @@
-// Instagram: call the same web_profile_info endpoint instagram.com uses, from inside
-// the logged-in page so the session cookie rides along. Never scrapes logged out.
+// Instagram: open the profile page in the logged-in headless browser and read the posts
+// from the GraphQL responses the page itself requests (PolarisProfilePostsQuery ->
+// xdt_api__v1__feed__user_timeline_graphql_connection). The old web_profile_info endpoint
+// returns 404 since late 2026. Never scrapes logged out.
 import { SourceError, decodeEntities } from './util.mjs';
 import { hasSession, LOGIN } from './browser.mjs';
 
-const IG_APP_ID = '936619743392459'; // public id of the instagram.com web app
+const GQL_RE = /instagram\.com\/(api\/graphql|graphql\/query)/;
+const friendlyName = (req) =>
+  req.headers()['x-fb-friendly-name'] || (req.postData() || '').match(/fb_api_req_friendly_name=([^&]+)/)?.[1] || '';
 
-async function igGet(page, path) {
-  return page.evaluate(
-    async ({ path, appId }) => {
-      const r = await fetch(path, { headers: { 'x-ig-app-id': appId, 'x-requested-with': 'XMLHttpRequest' }, credentials: 'include' });
-      return { status: r.status, url: r.url, text: await r.text() };
-    },
-    { path, appId: IG_APP_ID },
-  );
-}
-
-function judge(res, handle) {
-  let j = null;
+// Responses can carry a `for (;;);` guard or several JSON documents, one per line.
+function parseMany(text) {
+  const t = String(text || '').replace(/^for \(;;\);/, '');
   try {
-    j = JSON.parse(res.text);
+    return [JSON.parse(t)];
   } catch {}
-  const msg = `${j?.message || ''} ${res.text.slice(0, 200)}`;
-  if (res.status === 200 && j) return j;
-  if (j?.checkpoint_url || /checkpoint_required|challenge_required/.test(msg))
-    throw new SourceError('CHECKPOINT', 'Instagram wants a verification', { url: j?.checkpoint_url ? new URL(j.checkpoint_url, 'https://www.instagram.com').href : undefined });
-  if (res.status === 429 || /wait a few minutes/i.test(msg)) throw new SourceError('RATE', `Instagram rate limit (${res.status})`);
-  if (/login_required/.test(msg) || /\/accounts\/login/.test(res.url)) throw new SourceError('LOGIN', 'Instagram session expired');
-  if (res.status === 404) throw new SourceError('NOTFOUND', `@${handle} not found`);
-  throw new Error(`Instagram HTTP ${res.status}: ${(j?.message || res.text).slice(0, 120)}`);
+  return t
+    .split('\n')
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
 }
 
-const firstImage = (it) =>
-  it?.image_versions2?.candidates?.[0]?.url || it?.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url || null;
+function walk(node, visit) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) return node.forEach((n) => walk(n, visit));
+  visit(node);
+  for (const k in node) walk(node[k], visit);
+}
+
+const bestImage = (m) =>
+  m.image_versions2?.candidates?.[0]?.url || m.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url || m.display_uri || null;
 
 export async function fetchInstagram(page, src) {
   if (!(await hasSession(page.context(), 'instagram'))) throw new SourceError('LOGIN', 'Instagram session missing');
-  if (!page.url().startsWith(LOGIN.instagram.origin)) {
-    await page.goto(LOGIN.instagram.origin + '/', { waitUntil: 'domcontentloaded', timeout: 45000 });
-    if (LOGIN.instagram.blocked.test(new URL(page.url()).pathname)) {
-      const path = new URL(page.url()).pathname;
-      if (/challenge|checkpoint/.test(path)) throw new SourceError('CHECKPOINT', 'Instagram wants a verification', { url: page.url() });
-      throw new SourceError('LOGIN', 'Instagram redirected to login');
+  const me = src.handle.toLowerCase();
+  const bodies = [];
+  const onResponse = (r) => {
+    if (GQL_RE.test(r.url())) bodies.push(r.text().catch(() => ''));
+  };
+  page.on('response', onResponse);
+  try {
+    const postsLoaded = page
+      .waitForResponse((r) => GQL_RE.test(r.url()) && friendlyName(r.request()) === 'PolarisProfilePostsQuery', { timeout: 30000 })
+      .catch(() => null);
+    const nav = await page.goto(`https://www.instagram.com/${encodeURIComponent(src.handle)}/`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const path = new URL(page.url()).pathname;
+    if (/^\/(challenge|checkpoint|auth_platform)/.test(path)) throw new SourceError('CHECKPOINT', 'Instagram wants a verification', { url: page.url() });
+    if (LOGIN.instagram.blocked.test(path)) throw new SourceError('LOGIN', 'Instagram redirected to login');
+    if (nav?.status() === 404) throw new SourceError('NOTFOUND', `@${src.handle} not found`);
+    if (nav?.status() === 429) throw new SourceError('RATE', 'Instagram rate limit (429)');
+    await postsLoaded;
+    await page.waitForTimeout(1500); // let the profile-header query land too
+
+    const docs = (await Promise.all(bodies)).flatMap(parseMany);
+    const posts = [];
+    const seen = new Set();
+    let profile = null;
+    walk(docs, (n) => {
+      if (typeof n.code === 'string' && n.taken_at && (n.image_versions2 || n.carousel_media) && n.user?.username?.toLowerCase() === me) {
+        if (seen.has(n.code)) return;
+        seen.add(n.code);
+        posts.push({
+          key: `ig:${n.code}`,
+          platform: 'instagram',
+          id: n.code,
+          url: `https://www.instagram.com/p/${n.code}/`,
+          kind: 'post',
+          text: decodeEntities(n.caption?.text || '').trim(),
+          image: bestImage(n),
+          isVideo: n.media_type === 2 || !!n.video_versions?.length,
+          createdAt: n.taken_at * 1000,
+        });
+      } else if (!profile && n.username?.toLowerCase() === me && 'full_name' in n && n.profile_pic_url) {
+        profile = { name: n.full_name || src.handle, avatar: n.hd_profile_pic_url_info?.url || n.profile_pic_url, followers: n.follower_count ?? null };
+      }
+    });
+    if (!posts.length) {
+      if (/not found|isn.t available/i.test(await page.title().catch(() => ''))) throw new SourceError('NOTFOUND', `@${src.handle} not found`);
+      throw new Error('Instagram posts did not load');
     }
+    posts.sort((a, b) => a.createdAt - b.createdAt);
+    return { profile, posts };
+  } finally {
+    page.off('response', onResponse);
   }
-
-  const info = judge(await igGet(page, `/api/v1/users/web_profile_info/?username=${encodeURIComponent(src.handle)}`), src.handle);
-  const user = info?.data?.user;
-  if (!user) throw new SourceError('NOTFOUND', `@${src.handle} not found`);
-  const profile = { name: user.full_name || src.handle, avatar: user.profile_pic_url_hd || user.profile_pic_url || null, followers: user.edge_followed_by?.count ?? null };
-
-  let posts = (user.edge_owner_to_timeline_media?.edges || []).map(({ node: n }) => ({
-    key: `ig:${n.shortcode}`,
-    platform: 'instagram',
-    id: n.shortcode,
-    url: `https://www.instagram.com/p/${n.shortcode}/`,
-    kind: 'post',
-    text: decodeEntities(n.edge_media_to_caption?.edges?.[0]?.node?.text || '').trim(),
-    image: n.display_url || n.thumbnail_src || null,
-    isVideo: !!n.is_video,
-    createdAt: (n.taken_at_timestamp || 0) * 1000,
-  }));
-
-  // Some responses ship the profile without posts; the feed endpoint has them.
-  if (!posts.length && user.id && (user.edge_owner_to_timeline_media?.count ?? 1) > 0) {
-    const feed = judge(await igGet(page, `/api/v1/feed/user/${user.id}/?count=12`), src.handle);
-    posts = (feed.items || []).map((it) => ({
-      key: `ig:${it.code}`,
-      platform: 'instagram',
-      id: it.code,
-      url: `https://www.instagram.com/p/${it.code}/`,
-      kind: 'post',
-      text: (it.caption?.text || '').trim(),
-      image: firstImage(it),
-      isVideo: it.media_type === 2,
-      createdAt: (it.taken_at || 0) * 1000,
-    }));
-  }
-
-  posts.sort((a, b) => a.createdAt - b.createdAt);
-  return { profile, posts };
 }
