@@ -9,7 +9,7 @@ const FX = 'https://api.fxtwitter.com/2/profile/';
 
 export async function fetchXFx(src) {
   let last;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const r = await fetch(FX + encodeURIComponent(src.handle) + '/statuses', {
         headers: { 'User-Agent': 'lck-news-bot/1.0' },
@@ -21,7 +21,7 @@ export async function fetchXFx(src) {
     } catch (e) {
       last = new Error(`FxTwitter ${e.name === 'TimeoutError' ? 'timeout' : e.message}`);
     }
-    if (attempt === 0) await sleep(2000);
+    if (attempt < 2) await sleep(3000 * (attempt + 1));
   }
   throw last;
 }
@@ -151,7 +151,7 @@ export async function fetchX(page, src) {
   };
   page.on('response', onResponse);
   try {
-    const timeline = page.waitForResponse((r) => TIMELINE_RE.test(r.url()), { timeout: 25000 }).catch(() => null);
+    const timeline = page.waitForResponse((r) => TIMELINE_RE.test(r.url()), { timeout: 30000 }).catch(() => null);
     await page.goto(`https://x.com/${encodeURIComponent(src.handle)}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
     const resp = await timeline;
     const path = new URL(page.url()).pathname;
@@ -166,7 +166,8 @@ export async function fetchX(page, src) {
       if (userJson && !prof) throw new SourceError('NOTFOUND', `@${src.handle} does not exist`);
       if (prof?.unavailable) throw new SourceError('NOTFOUND', `@${src.handle} unavailable (${prof.unavailable})`);
       if (prof?.protected) throw new SourceError('NOTFOUND', `@${src.handle} is protected`);
-      throw new Error('timeline did not load (rate limit or slow page)');
+      const title = (await page.title().catch(() => '')).slice(0, 60);
+      throw new Error(`timeline did not load (page ${path} "${title}", user lookup ${userJson ? 'seen' : 'not seen'})`);
     }
     if (resp.status() === 429) throw new SourceError('RATE', 'X rate limit (429)');
     if (!resp.ok()) throw new Error(`timeline HTTP ${resp.status()}`);

@@ -42,6 +42,7 @@ jobs:
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           X_COOKIES: ${{ secrets.X_COOKIES }}
           IG_COOKIES: ${{ secrets.IG_COOKIES }}
+          BOT_FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
         run: node src/bot.mjs cloud
 
       - name: Save state

@@ -314,7 +314,7 @@ const commands = {
   },
   cloud: async () => {
     if (!CLOUD) throw new Error('"cloud" is for GitHub Actions; on this PC use once / run');
-    const r = await cycle();
+    const r = await cycle({ force: process.env.BOT_FORCE === '1' }); // manual runs check everything
     if (!r.rows.length) console.log('nothing due this tick');
     else printRows(r.rows);
     console.log(`posted ${r.posted} new item(s)`);
