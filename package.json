@@ -1,0 +1,20 @@
+{
+  "name": "lck-news-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Posts new LCK team / news posts from X and Instagram to a Discord channel",
+  "type": "module",
+  "scripts": {
+    "setup": "node src/bot.mjs setup",
+    "login": "node src/bot.mjs login",
+    "check": "node src/bot.mjs check",
+    "once": "node src/bot.mjs once",
+    "start": "node src/bot.mjs run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}
