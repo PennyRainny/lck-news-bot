@@ -1,8 +1,13 @@
 # LCK News Bot
 
 Posts new posts from LCK team and LCK news accounts (X + Instagram) into a Discord channel.
-Runs free on **GitHub Actions** every ~10 minutes. No X/Instagram API keys: a headless Chrome
-reads the same data the websites load, using a logged-in session.
+Runs free on **GitHub Actions** every ~10 minutes. No X/Instagram API keys.
+
+- **X**: read through FxTwitter's public API (`api.fxtwitter.com`) — no login, no browser.
+  An account FxTwitter misses on one run is picked up on the next. A logged-in X session is
+  only a backup (it works from this PC; from GitHub, X's Cloudflare check blocks it).
+- **Instagram**: a headless Chrome with your Instagram session opens the profile and reads the
+  posts from the page's own GraphQL response (`PolarisProfilePostsQuery`).
 
 ## How it works
 
@@ -21,8 +26,9 @@ GitHub Actions (cron */10)                     this PC (only when a human is nee
   (`includeRetweets`), replies to other people are skipped, quote posts are shown with the quote.
 - Same post seen through two accounts is sent once.
 - Instagram is checked every 30 min, X every 10 min (`sources.json`).
-- If a session dies, the bot posts **one** alert in the channel and pauses that platform until a
-  new login arrives (it retries the old one every 6 h).
+- If the Instagram session dies, the bot posts **one** alert in the channel and pauses Instagram
+  until a new login arrives (it retries the old one every 6 h).
+- If no X account can be read for 3 h (FxTwitter down), one alert; one more when it recovers.
 
 ## Secrets (never in the repo)
 

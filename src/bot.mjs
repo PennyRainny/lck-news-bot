@@ -50,6 +50,7 @@ const HUMAN_TIMEOUT_MIN = 15;
 const HUMAN_RETRY_MIN = 60; // local: re-open the login window after this
 const DEAD_RETRY_H = 6; // cloud: retry a dead session (same secret) after this
 const KEEPALIVE_DAYS = 7; // cloud: touch state so GitHub never disables the schedule (60-day rule)
+const XDOWN_ALERT_H = 3; // cloud: alert when no X account was readable for this long
 
 async function launch() {
   try {
@@ -320,10 +321,27 @@ const commands = {
     console.log(`posted ${r.posted} new item(s)`);
     for (const [p, info] of Object.entries(r.needHuman)) await cloudAlert(p, info);
     const s = loadState();
-    if (Date.now() - (s.keepalive || 0) > KEEPALIVE_DAYS * 864e5) {
-      s.keepalive = Date.now();
-      saveState(s);
+    // Whole-X outage watch (e.g. FxTwitter gone): one alert after XDOWN_ALERT_H, one on recovery.
+    const xRows = r.rows.filter((row) => row.src.platform === 'x');
+    if (xRows.length) {
+      const now = Date.now();
+      if (!xRows.some((row) => row.status === 'ok')) {
+        s.xDownSince ??= now;
+        if (!s.xDownAlerted && now - s.xDownSince > XDOWN_ALERT_H * 3600e3) {
+          await sendText(
+            `⚠️ **LCK News Bot** — no X account could be read for ${XDOWN_ALERT_H} h (login-free route down, cloud backup blocked). ` +
+              'Run `npm run once` on the bot PC to catch up, or `npm start` to run from the PC until it recovers.',
+          ).catch((e) => log('alert failed:', e.message));
+          s.xDownAlerted = now;
+        }
+      } else if (s.xDownSince) {
+        if (s.xDownAlerted) await sendText('✅ X posts are coming through again.').catch(() => {});
+        delete s.xDownSince;
+        delete s.xDownAlerted;
+      }
     }
+    if (Date.now() - (s.keepalive || 0) > KEEPALIVE_DAYS * 864e5) s.keepalive = Date.now();
+    saveState(s);
   },
   preview: () => previewCmd(arg),
   test: async () => {

@@ -167,6 +167,8 @@ export async function fetchX(page, src) {
       if (prof?.unavailable) throw new SourceError('NOTFOUND', `@${src.handle} unavailable (${prof.unavailable})`);
       if (prof?.protected) throw new SourceError('NOTFOUND', `@${src.handle} is protected`);
       const title = (await page.title().catch(() => '')).slice(0, 60);
+      // Cloudflare's bot check (seen from GitHub's datacenter IPs): no point retrying this run
+      if (/just a moment/i.test(title)) throw new SourceError('RATE', 'X Cloudflare check ("Just a moment...") — session route blocked from this IP');
       throw new Error(`timeline did not load (page ${path} "${title}", user lookup ${userJson ? 'seen' : 'not seen'})`);
     }
     if (resp.status() === 429) throw new SourceError('RATE', 'X rate limit (429)');
