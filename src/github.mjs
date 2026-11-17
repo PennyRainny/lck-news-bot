@@ -21,7 +21,7 @@ export function secretNames() {
 
 export function runWorkflow() {
   gh(['workflow', 'enable', WORKFLOW]); // the schedule stays off until setup presses Start
-  gh(['workflow', 'run', WORKFLOW]);
+  gh(['workflow', 'run', WORKFLOW, '-f', 'force=true']);
 }
 
 export const actionsUrl = () => `https://github.com/${repo()}/actions/workflows/${WORKFLOW}`;

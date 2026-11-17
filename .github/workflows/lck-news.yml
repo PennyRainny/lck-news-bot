@@ -4,7 +4,14 @@ on:
   schedule:
     # every 10 min, off the top of the hour (GitHub drops scheduled runs most at :00)
     - cron: '7,17,27,37,47,57 * * * *'
+  # The Cloudflare Worker dispatches this every 30 min (GitHub's own schedule is unreliable).
+  # Without `force`, Instagram is only checked if 25+ min passed since its last check.
   workflow_dispatch:
+    inputs:
+      force:
+        description: Check every platform now, ignoring the interval
+        type: boolean
+        default: false
 
 permissions:
   contents: write # push state.json to the `state` branch
@@ -43,7 +50,7 @@ jobs:
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           X_COOKIES: ${{ secrets.X_COOKIES }}
           IG_COOKIES: ${{ secrets.IG_COOKIES }}
-          BOT_FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+          BOT_FORCE: ${{ inputs.force && '1' || '' }}
           BOT_PLATFORMS: instagram # X is checked every minute by the Cloudflare Worker (worker/)
         run: node src/bot.mjs cloud
 

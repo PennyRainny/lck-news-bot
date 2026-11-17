@@ -8,7 +8,7 @@ const DISCORD = 'https://discord.com/api/v10';
 // first run only: start from what the GitHub bot already saw, so nothing is posted twice
 const GH_STATE = 'https://api.github.com/repos/PennyRainny/lck-news-bot/contents/state.json?ref=state';
 const UA = 'lck-news-bot/1.0';
-const MAX_POSTS_PER_TICK = 10; // Workers allow 50 sub-requests per call; the rest go next minute
+const MAX_POSTS_PER_TICK = 8; // Workers allow 50 sub-requests per call (24 FxTwitter worst case); the rest go next minute
 const XDOWN_ALERT_H = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,7 +21,7 @@ export function xConfig(raw) {
   };
 }
 
-async function fetchFx(src, fetchFn) {
+async function fetchFxOnce(src, fetchFn) {
   try {
     const r = await fetchFn(FX + encodeURIComponent(src.handle) + '/statuses', {
       headers: { 'User-Agent': UA },
@@ -33,6 +33,28 @@ async function fetchFx(src, fetchFn) {
   } catch (e) {
     return { ok: false, error: e.name === 'TimeoutError' ? 'timeout' : String(e.message || e) };
   }
+}
+
+// FxTwitter randomly answers 404 "no posts" for an account; one retry a moment later usually works.
+async function fetchFx(src, fetchFn) {
+  const first = await fetchFxOnce(src, fetchFn);
+  if (first.ok) return first;
+  await sleep(1500 + Math.random() * 1500);
+  return fetchFxOnce(src, fetchFn);
+}
+
+// 3 at a time instead of all 12 at once — gentler on FxTwitter
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 async function importState(fetchFn, log) {
@@ -80,6 +102,27 @@ async function discord(env, fetchFn, path, body) {
   throw Object.assign(new Error('Discord rate limit'), { status: 429 });
 }
 
+// Start the GitHub Actions run that checks Instagram (GitHub's own cron is unreliable).
+// GH_DISPATCH_TOKEN: fine-grained token for this one repo, Actions: read & write.
+const GH_DISPATCH = 'https://api.github.com/repos/PennyRainny/lck-news-bot/actions/workflows/lck-news.yml/dispatches';
+export async function kickInstagram(env, fetchFn = fetch, log = console.log) {
+  try {
+    const r = await fetchFn(GH_DISPATCH, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${String(env.GH_DISPATCH_TOKEN).trim()}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': UA,
+      },
+      body: JSON.stringify({ ref: 'main' }),
+    });
+    log(r.status === 204 ? 'started the Instagram check on GitHub' : `GitHub dispatch failed: HTTP ${r.status} ${(await r.text()).slice(0, 120)}`);
+  } catch (e) {
+    log(`GitHub dispatch failed: ${e.message}`);
+  }
+}
+
 export async function tick({ env, storage, sources, fetchFn = fetch, log = console.log, dry = false }) {
   const cfg = xConfig(sources);
   const channel = String(env.DISCORD_CHANNEL_ID || '').trim();
@@ -97,7 +140,7 @@ export async function tick({ env, storage, sources, fetchFn = fetch, log = conso
     savedJson = json;
   };
 
-  const results = await Promise.all(cfg.sources.map((src) => fetchFx(src, fetchFn)));
+  const results = await mapLimit(cfg.sources, 3, (src) => fetchFx(src, fetchFn));
   const outbox = [];
   const rows = results.map((r, i) => {
     const src = cfg.sources[i];

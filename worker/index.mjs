@@ -4,7 +4,7 @@
 // running blocks the next one, so a post can never go out twice.
 import { DurableObject } from 'cloudflare:workers';
 import sources from '../sources.json';
-import { tick } from './tick.mjs';
+import { kickInstagram, tick } from './tick.mjs';
 
 export class Ticker extends DurableObject {
   busy = false;
@@ -22,7 +22,9 @@ export class Ticker extends DurableObject {
 }
 
 export default {
-  async scheduled(_controller, env) {
+  async scheduled(controller, env, ctx) {
+    // :03 and :33 — start GitHub's Instagram check (it skips if 25 min have not passed)
+    if (env.GH_DISPATCH_TOKEN && new Date(controller.scheduledTime).getUTCMinutes() % 30 === 3) ctx.waitUntil(kickInstagram(env));
     await env.TICKER.get(env.TICKER.idFromName('x')).tick();
   },
 };
