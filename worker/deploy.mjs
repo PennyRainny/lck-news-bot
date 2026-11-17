@@ -18,10 +18,6 @@ const wrangler = (args, input) => {
 const secrets = ['DISCORD_TOKEN', 'DISCORD_CHANNEL_ID'];
 for (const name of secrets) if (!process.env[name]?.trim()) throw new Error(`${name} is missing in .env (run: npm run setup)`);
 
-// optional: lets the Worker start GitHub's Instagram check every 30 min
-if (process.env.GH_DISPATCH_TOKEN?.trim()) secrets.push('GH_DISPATCH_TOKEN');
-else console.log('GH_DISPATCH_TOKEN not in .env — Instagram relies on GitHub\'s own (unreliable) schedule');
-
 wrangler(['deploy']);
 for (const name of secrets) wrangler(['secret', 'put', name], process.env[name].trim());
 console.log(`Worker deployed; it checks the X accounts every minute. Secrets set: ${secrets.join(', ')}`);

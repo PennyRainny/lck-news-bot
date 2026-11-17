@@ -1,10 +1,9 @@
 // Cloudflare Worker: checks the X accounts every minute (cron "* * * * *") and posts new posts
-// to Discord. Instagram stays on GitHub Actions (it needs a real browser + session).
-// Seen-post state lives in ONE Durable Object: strongly consistent, and a check that is still
-// running blocks the next one, so a post can never go out twice.
+// to Discord. Seen-post state lives in ONE Durable Object: strongly consistent, and a check that
+// is still running blocks the next one, so a post can never go out twice.
 import { DurableObject } from 'cloudflare:workers';
 import sources from '../sources.json';
-import { kickInstagram, tick } from './tick.mjs';
+import { tick } from './tick.mjs';
 
 export class Ticker extends DurableObject {
   busy = false;
@@ -22,9 +21,7 @@ export class Ticker extends DurableObject {
 }
 
 export default {
-  async scheduled(controller, env, ctx) {
-    // :03 and :33 — start GitHub's Instagram check (it skips if 25 min have not passed)
-    if (env.GH_DISPATCH_TOKEN && new Date(controller.scheduledTime).getUTCMinutes() % 30 === 3) ctx.waitUntil(kickInstagram(env));
+  async scheduled(_controller, env) {
     await env.TICKER.get(env.TICKER.idFromName('x')).tick();
   },
 };

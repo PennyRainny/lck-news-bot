@@ -102,27 +102,6 @@ async function discord(env, fetchFn, path, body) {
   throw Object.assign(new Error('Discord rate limit'), { status: 429 });
 }
 
-// Start the GitHub Actions run that checks Instagram (GitHub's own cron is unreliable).
-// GH_DISPATCH_TOKEN: fine-grained token for this one repo, Actions: read & write.
-const GH_DISPATCH = 'https://api.github.com/repos/PennyRainny/lck-news-bot/actions/workflows/lck-news.yml/dispatches';
-export async function kickInstagram(env, fetchFn = fetch, log = console.log) {
-  try {
-    const r = await fetchFn(GH_DISPATCH, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${String(env.GH_DISPATCH_TOKEN).trim()}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': UA,
-      },
-      body: JSON.stringify({ ref: 'main' }),
-    });
-    log(r.status === 204 ? 'started the Instagram check on GitHub' : `GitHub dispatch failed: HTTP ${r.status} ${(await r.text()).slice(0, 120)}`);
-  } catch (e) {
-    log(`GitHub dispatch failed: ${e.message}`);
-  }
-}
-
 export async function tick({ env, storage, sources, fetchFn = fetch, log = console.log, dry = false }) {
   const cfg = xConfig(sources);
   const channel = String(env.DISCORD_CHANNEL_ID || '').trim();
