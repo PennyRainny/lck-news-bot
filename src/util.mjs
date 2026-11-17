@@ -13,7 +13,7 @@ export const PATHS = {
 };
 
 export const PLATFORMS = ['x', 'instagram'];
-export const PLATFORM_NAME = { x: 'X', instagram: 'Instagram' };
+export { PLATFORM_NAME, srcKey, truncate } from './shared.mjs';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const jitter = (min, max) => sleep(min + Math.random() * (max - min));
@@ -83,13 +83,6 @@ export function loadSources() {
     s.label ??= s.handle;
   }
   return cfg;
-}
-
-export const srcKey = (src) => `${src.platform}:${src.handle.toLowerCase()}`;
-
-export function truncate(s, n) {
-  s = String(s ?? '');
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 export function decodeEntities(s) {

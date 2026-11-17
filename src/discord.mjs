@@ -1,5 +1,6 @@
 // Discord via plain REST (no discord.js). The token is read from process.env only.
-import { PLATFORM_NAME, sleep, truncate } from './util.mjs';
+import { sleep, truncate } from './util.mjs';
+import { toEmbed } from './shared.mjs';
 
 const API = 'https://discord.com/api/v10';
 export const PERMISSIONS = 1024 + 2048 + 16384; // View Channel + Send Messages + Embed Links
@@ -100,26 +101,7 @@ export async function sendText(content) {
   return api('POST', `/channels/${channelId()}/messages`, { content: truncate(content, 2000), allowed_mentions: NO_PINGS });
 }
 
-export function toEmbed(item, src, profile) {
-  const plat = PLATFORM_NAME[item.platform];
-  const profileUrl = item.platform === 'x' ? `https://x.com/${src.handle}` : `https://www.instagram.com/${src.handle}/`;
-  let title = item.kind === 'repost' ? `${src.label} reposted ${item.repostOf}` : `${src.label} · new ${plat} post`;
-  if (item.isVideo) title += ' ▶️';
-  let desc = item.text || '';
-  if (item.quote) desc += `\n\n> **${item.quote.author}**: ${truncate(item.quote.text, 400).replace(/\n/g, '\n> ')}`;
-  const color = parseInt(String(src.color || '#888888').replace('#', ''), 16);
-  const avatar = profile?.avatar && /^https?:\/\//.test(profile.avatar) ? profile.avatar : undefined;
-  return {
-    title: truncate(title, 256),
-    url: item.url,
-    description: truncate(desc, item.platform === 'instagram' ? 1500 : 3900) || undefined,
-    color: Number.isFinite(color) ? color : 0x888888,
-    author: { name: truncate(`${profile?.name || src.label} (@${src.handle})`, 256), url: profileUrl, icon_url: avatar },
-    image: item.image ? { url: item.image } : undefined,
-    footer: { text: item.isVideo ? `${plat} · video — open the post to watch` : plat },
-    timestamp: new Date(item.createdAt).toISOString(),
-  };
-}
+export { toEmbed }; // lives in shared.mjs (the Cloudflare Worker uses it too)
 
 export async function sendPost(item, src, profile) {
   return api('POST', `/channels/${channelId()}/messages`, { embeds: [toEmbed(item, src, profile)], allowed_mentions: NO_PINGS });

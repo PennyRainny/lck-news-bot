@@ -1,0 +1,22 @@
+# Cloudflare Worker that checks the X accounts every minute (free plan).
+# Deploy: npm run deploy:worker   Logs: npm run logs:worker
+# Secrets (never in this file): DISCORD_TOKEN, DISCORD_CHANNEL_ID — set by `npm run deploy:worker`.
+name = "lck-news-x"
+main = "index.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false # no public URL: it only runs on the cron
+preview_urls = false
+
+[triggers]
+crons = ["* * * * *"]
+
+[[durable_objects.bindings]]
+name = "TICKER"
+class_name = "Ticker"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Ticker"] # SQLite-backed Durable Objects are on the free plan
+
+[observability]
+enabled = true

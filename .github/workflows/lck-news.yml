@@ -44,6 +44,7 @@ jobs:
           X_COOKIES: ${{ secrets.X_COOKIES }}
           IG_COOKIES: ${{ secrets.IG_COOKIES }}
           BOT_FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+          BOT_PLATFORMS: instagram # X is checked every minute by the Cloudflare Worker (worker/)
         run: node src/bot.mjs cloud
 
       - name: Save state

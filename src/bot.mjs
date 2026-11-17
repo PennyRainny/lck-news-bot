@@ -7,7 +7,8 @@
 //   node src/bot.mjs test                send a test message to the channel
 //   node src/bot.mjs cloud               one cycle inside GitHub Actions (the schedule calls this)
 //   node src/bot.mjs run                 run forever on this PC instead of the cloud
-import { PLATFORMS, PLATFORM_NAME, jitter, loadEnv, loadSources, loadState, log, saveState, sleep, srcKey } from './util.mjs';
+import { PLATFORMS, PLATFORM_NAME, jitter, loadEnv, loadSources, loadState, log, saveState, sleep } from './util.mjs';
+import { pruneSeen, queueNew as queueNewShared } from './shared.mjs';
 import { CLOUD, openBrowser, secretHash } from './browser.mjs';
 import { fetchX, fetchXFx } from './x.mjs';
 import { fetchInstagram } from './instagram.mjs';
@@ -45,7 +46,6 @@ function lazyBrowser() {
   };
 }
 
-const SEEN_TTL = 7 * 24 * 3600e3; // > maxAgeHours, so an old post can never come back
 const HUMAN_TIMEOUT_MIN = 15;
 const HUMAN_RETRY_MIN = 60; // local: re-open the login window after this
 const DEAD_RETRY_H = 6; // cloud: retry a dead session (same secret) after this
@@ -80,23 +80,8 @@ function isDue(p, cfg, state, now) {
   return (state.humanWaitUntil[p] || 0) <= now && now - (state.lastRun[p] || 0) >= cfg.intervalsMinutes[p] * 60e3 - 5000;
 }
 
-// Decide which fetched posts are new. Reposts are skipped (unless enabled) WITHOUT being
-// marked seen, so the original author's own source can still post them.
 function queueNew(state, cfg, src, res, outbox) {
-  const k = srcKey(src);
-  const seeding = !state.seeded[k];
-  const oldest = Date.now() - cfg.maxAgeHours * 3600e3;
-  for (const item of res.posts) {
-    if (item.kind === 'repost' && !cfg.includeRetweets) continue;
-    if (state.seen[item.key]) continue;
-    if (seeding || item.createdAt < oldest) {
-      state.seen[item.key] = Date.now();
-      continue;
-    }
-    if (!outbox.some((o) => o.item.key === item.key)) outbox.push({ item, src, profile: res.profile });
-  }
-  if (seeding) {
-    state.seeded[k] = Date.now();
+  if (queueNewShared(state, cfg, src, res, outbox)) {
     log(`[${src.platform}] first look at @${src.handle}: ${res.posts.length} existing posts marked seen (not posted)`);
   }
 }
@@ -106,7 +91,11 @@ async function cycle({ force = false, dry = false } = {}) {
   const state = loadState();
   const now = Date.now();
   const out = { rows: [], needHuman: {}, posted: 0 };
-  const due = PLATFORMS.filter((p) => cfg.sources.some((s) => s.platform === p) && (force || isDue(p, cfg, state, now)));
+  // BOT_PLATFORMS=instagram on GitHub: X is checked every minute by the Cloudflare Worker (worker/)
+  const only = (process.env.BOT_PLATFORMS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const due = PLATFORMS.filter(
+    (p) => (!only.length || only.includes(p)) && cfg.sources.some((s) => s.platform === p) && (force || isDue(p, cfg, state, now)),
+  );
   if (!due.length) return out;
 
   const outbox = [];
@@ -181,7 +170,7 @@ async function cycle({ force = false, dry = false } = {}) {
     delete state.alerts[p];
     await sendText(`✅ ${PLATFORM_NAME[p]} session works again — posts resume.`).catch(() => {});
   }
-  for (const [k, t] of Object.entries(state.seen)) if (now - t > SEEN_TTL) delete state.seen[k];
+  pruneSeen(state, now);
   saveState(state);
   return out;
 }

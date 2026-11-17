@@ -4,6 +4,7 @@
 //                 profile page requests. Backup when FxTwitter fails / returns nothing.
 import { SourceError, decodeEntities, sleep } from './util.mjs';
 import { hasSession, LOGIN } from './browser.mjs';
+import { parseFx } from './shared.mjs';
 
 const FX = 'https://api.fxtwitter.com/2/profile/';
 
@@ -26,44 +27,7 @@ export async function fetchXFx(src) {
   throw last;
 }
 
-export function parseFx(j, handle) {
-  const me = handle.toLowerCase();
-  let profile = null;
-  const posts = [];
-  const seen = new Set();
-  for (const s of j.results || []) {
-    if (s.type && s.type !== 'status') continue;
-    const author = s.author?.screen_name || '';
-    const mine = author.toLowerCase() === me;
-    if (!profile && (mine || s.reposted_by)) {
-      const u = mine ? s.author : s.reposted_by;
-      profile = { name: u.name, avatar: u.avatar_url || null, followers: u.followers ?? null };
-    }
-    const repost = !!s.reposted_by;
-    if (!repost && !mine) continue;
-    const replyTo = typeof s.replying_to === 'string' ? s.replying_to : s.replying_to?.screen_name;
-    if (!repost && replyTo && replyTo.toLowerCase() !== me) continue; // replies to other people
-    if (seen.has(s.id)) continue;
-    seen.add(s.id);
-    const m = s.media?.all?.[0];
-    const q = s.quote;
-    posts.push({
-      key: `x:${s.id}`,
-      platform: 'x',
-      id: s.id,
-      url: `https://x.com/${author}/status/${s.id}`,
-      kind: repost ? 'repost' : q ? 'quote' : 'post',
-      repostOf: repost ? '@' + author : null,
-      text: String(s.text || '').trim(),
-      image: m ? (m.type === 'photo' ? m.url : m.thumbnail_url || null) : null,
-      isVideo: !!m && m.type !== 'photo',
-      quote: q ? { author: '@' + (q.author?.screen_name || '?'), text: String(q.text || '').trim() } : null,
-      createdAt: (s.created_timestamp || 0) * 1000 || Date.parse(s.created_at) || Date.now(),
-    });
-  }
-  posts.sort((a, b) => a.createdAt - b.createdAt);
-  return { profile, posts };
-}
+export { parseFx }; // lives in shared.mjs (the Cloudflare Worker uses it too)
 
 const TIMELINE_RE = /\/i\/api\/graphql\/[^/]+\/UserTweets(\?|$)/;
 const USER_RE = /\/i\/api\/graphql\/[^/]+\/UserByScreenName(\?|$)/;

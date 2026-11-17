@@ -9,7 +9,9 @@
     "login": "node src/bot.mjs login",
     "check": "node src/bot.mjs check",
     "once": "node src/bot.mjs once",
-    "start": "node src/bot.mjs run"
+    "start": "node src/bot.mjs run",
+    "deploy:worker": "node worker/deploy.mjs",
+    "logs:worker": "npx -y wrangler@4 tail -c worker/wrangler.toml"
   },
   "engines": {
     "node": ">=22"

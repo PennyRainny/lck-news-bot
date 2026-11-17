@@ -4,3 +4,6 @@ node_modules/
 state.json
 state.json.tmp
 logs/
+.wrangler/
+worker/.wrangler/
+.dev.vars
